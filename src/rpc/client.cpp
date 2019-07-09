@@ -174,6 +174,7 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "listnameclaims", 0, "includesupports"},
     { "listnameclaims", 1, "activeonly"},
     { "listnameclaims", 2, "minconf"},
+    { "gettotalvalueofclaims", 0, "controlling_only"},
 };
 
 class CRPCConvertTable

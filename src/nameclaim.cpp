@@ -35,11 +35,14 @@ CScript ClaimNameScript(std::string name, std::string value)
     return CScript() << OP_CLAIM_NAME << vchName << vchValue << OP_2DROP << OP_DROP << OP_TRUE;
 }
 
-CScript SupportClaimScript(std::string name, uint160 claimId)
+CScript SupportClaimScript(std::string name, uint160 claimId, std::string value)
 {
     std::vector<unsigned char> vchName(name.begin(), name.end());
     std::vector<unsigned char> vchClaimId(claimId.begin(), claimId.end());
-    return CScript() << OP_SUPPORT_CLAIM << vchName << vchClaimId << OP_2DROP << OP_DROP << OP_TRUE;
+    if (value.empty())
+        return CScript() << OP_SUPPORT_CLAIM << vchName << vchClaimId << OP_2DROP << OP_DROP << OP_TRUE;
+    std::vector<unsigned char> vchValue(value.begin(), value.end());
+    return CScript() << OP_SUPPORT_CLAIM << vchName << vchClaimId << vchValue << OP_2DROP << OP_2DROP << OP_TRUE;
 }
 
 CScript UpdateClaimScript(std::string name, uint160 claimId, std::string value)
@@ -78,6 +81,7 @@ bool DecodeClaimScript(const CScript& scriptIn, int& op, std::vector<std::vector
     // OP_CLAIM_NAME vchName vchValue OP_2DROP OP_DROP pubkeyscript
     // OP_UPDATE_CLAIM vchName vchClaimId vchValue OP_2DROP OP_2DROP pubkeyscript
     // OP_SUPPORT_CLAIM vchName vchClaimId OP_2DROP OP_DROP pubkeyscript
+    // OP_SUPPORT_CLAIM vchName vchClaimId vchValue OP_2DROP OP_2DROP pubkeyscript
     // All others are invalid.
 
     if (!scriptIn.GetOp(pc, opcode, vchParam1) || opcode < 0 || opcode > OP_PUSHDATA4)
@@ -95,33 +99,36 @@ bool DecodeClaimScript(const CScript& scriptIn, int& op, std::vector<std::vector
             return false;
         }
     }
-    if (op == OP_UPDATE_CLAIM)
+
+    if (!scriptIn.GetOp(pc, opcode, vchParam3))
     {
-        if (!scriptIn.GetOp(pc, opcode, vchParam3) || opcode < 0 || opcode > OP_PUSHDATA4)
+        return false;
+    }
+    auto last_drop = OP_DROP;
+    if (opcode >= 0 && opcode <= OP_PUSHDATA4 && op != OP_CLAIM_NAME)
+    {
+        if (!scriptIn.GetOp(pc, opcode))
         {
             return false;
         }
+        last_drop = OP_2DROP;
     }
-    if (!scriptIn.GetOp(pc, opcode) || opcode != OP_2DROP)
+    else if (op == OP_UPDATE_CLAIM)
     {
         return false;
     }
-    if (!scriptIn.GetOp(pc, opcode))
+    if (opcode != OP_2DROP)
     {
         return false;
     }
-    if ((op == OP_CLAIM_NAME || op == OP_SUPPORT_CLAIM) && opcode != OP_DROP)
-    {
-        return false;
-    }
-    else if ((op == OP_UPDATE_CLAIM) && opcode != OP_2DROP)
+    if (!scriptIn.GetOp(pc, opcode) || opcode != last_drop)
     {
         return false;
     }
 
     vvchParams.push_back(vchParam1);
     vvchParams.push_back(vchParam2);
-    if (op == OP_UPDATE_CLAIM)
+    if (last_drop == OP_2DROP)
     {
         vvchParams.push_back(vchParam3);
     }
