@@ -344,21 +344,14 @@ public:
 class CClaimTrieProof
 {
 public:
-    CClaimTrieProof()
-    {
-    }
-
-    CClaimTrieProof(std::vector<CClaimTrieProofNode> nodes, bool hasValue, const COutPoint& outPoint, int nHeightOfLastTakeover)
-        : nodes(std::move(nodes)), hasValue(hasValue), outPoint(outPoint), nHeightOfLastTakeover(nHeightOfLastTakeover)
-    {
-    }
-
+    CClaimTrieProof() = default;
     CClaimTrieProof(CClaimTrieProof&&) = default;
     CClaimTrieProof(const CClaimTrieProof&) = default;
     CClaimTrieProof& operator=(CClaimTrieProof&&) = default;
     CClaimTrieProof& operator=(const CClaimTrieProof&) = default;
 
     std::vector<CClaimTrieProofNode> nodes;
+    std::vector<std::pair<bool, uint256>> pairs;
     bool hasValue;
     COutPoint outPoint;
     int nHeightOfLastTakeover;
@@ -455,7 +448,8 @@ protected:
     CClaimTrie cache;
     std::unordered_set<std::string> namesToCheckForTakeover;
 
-    uint256 recursiveComputeMerkleHash(CClaimTrie::iterator& it);
+    virtual uint256 recursiveComputeMerkleHash(CClaimTrie::iterator& it);
+    virtual bool recursiveCheckConsistency(CClaimTrie::const_iterator& it, int minimumHeight, std::string& failed) const;
 
     virtual bool insertClaimIntoTrie(const std::string& name, const CClaimValue& claim, bool fCheckTakeover);
     virtual bool removeClaimFromTrie(const std::string& name, const COutPoint& outPoint, CClaimValue& claim, bool fCheckTakeover);
@@ -607,6 +601,20 @@ private:
         std::vector<std::pair<std::string, int>>& takeoverHeightUndo);
 };
 
-typedef CClaimTrieCacheNormalizationFork CClaimTrieCache;
+class CClaimTrieCacheHashFork : public CClaimTrieCacheNormalizationFork
+{
+public:
+    explicit CClaimTrieCacheHashFork(CClaimTrie* base, bool fRequireTakeoverHeights = true);
+
+    bool getProofForName(const std::string& name, CClaimTrieProof& proof) override;
+
+protected:
+    uint256 recursiveComputeMerkleHash(CClaimTrie::iterator& it) override;
+    bool recursiveCheckConsistency(CClaimTrie::const_iterator& it, int minimumHeight, std::string& failed) const override;
+
+private:
+};
+
+typedef CClaimTrieCacheHashFork CClaimTrieCache;
 
 #endif // BITCOIN_CLAIMTRIE_H

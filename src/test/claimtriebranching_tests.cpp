@@ -25,6 +25,7 @@
 extern ::CChainState g_chainstate;
 extern ::ArgsManager gArgs;
 extern std::vector<std::string> random_strings(std::size_t count);
+extern std::vector<uint256> getNodeHash(CClaimTrie::const_iterator);
 
 using namespace std;
 
@@ -72,7 +73,7 @@ static BlockAssembler AssemblerForTest()
 }
 
 // Test Fixtures
-struct ClaimTrieChainFixture: public CClaimTrieCacheBase
+struct ClaimTrieChainFixture: public CClaimTrieCache
 {
     std::vector<CTransaction> coinbase_txs;
     std::vector<int> marks;
@@ -86,9 +87,9 @@ struct ClaimTrieChainFixture: public CClaimTrieCacheBase
     int64_t originalExpiration;
     int64_t extendedExpiration;
 
-    using CClaimTrieCacheBase::getSupportsForName;
+    using CClaimTrieCache::getSupportsForName;
 
-    ClaimTrieChainFixture(): CClaimTrieCacheBase(pclaimTrie),
+    ClaimTrieChainFixture(): CClaimTrieCache(pclaimTrie),
         unique_block_counter(0), normalization_original(-1), expirationForkHeight(-1)
     {
         fRequireStandard = false;
@@ -145,6 +146,13 @@ struct ClaimTrieChainFixture: public CClaimTrieCacheBase
         if (normalization_original < 0)
             normalization_original = consensus.nNormalizedNameForkHeight;
         consensus.nNormalizedNameForkHeight = target;
+    }
+
+    void setHashForkHeigh(int targetMinusCurrent)
+    {
+        int target = chainActive.Height() + targetMinusCurrent;
+        auto& consensus = const_cast<Consensus::Params&>(Params().GetConsensus());
+        consensus.nAllClaimsInMerkleForkHeight = target;
     }
 
     bool CreateBlock(const std::unique_ptr<CBlockTemplate>& pblocktemplate)
@@ -4106,6 +4114,102 @@ BOOST_AUTO_TEST_CASE(update_on_support2_test)
     fixture.IncrementBlocks(1);
 
     BOOST_CHECK_EQUAL(pclaimTrie->find(name)->nHeightOfLastTakeover, height + 1);
+}
+
+void ValidatePairs(CClaimTrieCache& cache, const CClaimTrieProof& proof, uint256 claimHash)
+{
+    for (auto& pair : proof.pairs)
+        if (pair.first) // we're on the right because we were an odd index number
+            claimHash = Hash(pair.second.begin(), pair.second.end(), claimHash.begin(), claimHash.end());
+        else
+            claimHash = Hash(claimHash.begin(), claimHash.end(), pair.second.begin(), pair.second.end());
+
+    BOOST_CHECK_EQUAL(cache.getMerkleHash(), claimHash);
+}
+
+BOOST_AUTO_TEST_CASE(hash_includes_all_claims_rollback_test)
+{
+    ClaimTrieChainFixture fixture;
+    fixture.setHashForkHeigh(5);
+
+    CMutableTransaction tx1 = fixture.MakeClaim(fixture.GetCoinbase(), "test", "one", 1);
+    fixture.IncrementBlocks(1);
+
+    uint256 currentRoot = fixture.getMerkleHash();
+    fixture.IncrementBlocks(1);
+    BOOST_CHECK_EQUAL(currentRoot, fixture.getMerkleHash());
+    fixture.IncrementBlocks(3);
+    BOOST_CHECK_NE(currentRoot, fixture.getMerkleHash());
+    fixture.DecrementBlocks(3);
+    BOOST_CHECK_EQUAL(currentRoot, fixture.getMerkleHash());
+}
+
+BOOST_AUTO_TEST_CASE(hash_includes_all_claims_single_test)
+{
+    ClaimTrieChainFixture fixture;
+    fixture.setHashForkHeigh(2);
+    fixture.IncrementBlocks(4);
+
+    CMutableTransaction tx1 = fixture.MakeClaim(fixture.GetCoinbase(), "test", "one", 1);
+    fixture.IncrementBlocks(1);
+
+    CClaimTrieProof proof;
+    BOOST_CHECK(fixture.getProofForName("test", proof));
+    auto it = fixture.find("test");
+    BOOST_CHECK_EQUAL(it->claims.size(), 1);
+    auto claimHash = ComputeMerkleRoot(getNodeHash(it));
+    ValidatePairs(fixture, proof, claimHash);
+}
+
+BOOST_AUTO_TEST_CASE(hash_includes_all_claims_triple_test)
+{
+    ClaimTrieChainFixture fixture;
+    fixture.setHashForkHeigh(2);
+    fixture.IncrementBlocks(4);
+
+    std::string names[] = {"test", "tester", "tester2"};
+    CMutableTransaction tx1 = fixture.MakeClaim(fixture.GetCoinbase(), names[0], "one", 1);
+    CMutableTransaction tx2 = fixture.MakeClaim(fixture.GetCoinbase(), names[0], "two", 2);
+    CMutableTransaction tx3 = fixture.MakeClaim(fixture.GetCoinbase(), names[0], "thr", 3);
+    CMutableTransaction tx4 = fixture.MakeClaim(fixture.GetCoinbase(), names[1], "two", 2);
+    CMutableTransaction tx5 = fixture.MakeClaim(fixture.GetCoinbase(), names[1], "thr", 3);
+    CMutableTransaction tx6 = fixture.MakeClaim(fixture.GetCoinbase(), names[2], "one", 1);
+    fixture.IncrementBlocks(1);
+
+    CClaimTrieProof proof;
+    for (const auto& name : names) {
+        BOOST_CHECK(fixture.getProofForName(name, proof));
+        auto it = fixture.find(name);
+        BOOST_CHECK_EQUAL(it->claims.size(), 1);
+        auto claimHash = ComputeMerkleRoot(getNodeHash(it));
+        ValidatePairs(fixture, proof, claimHash);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(hash_includes_all_claims_branched_test)
+{
+    ClaimTrieChainFixture fixture;
+    fixture.setHashForkHeigh(2);
+    fixture.IncrementBlocks(4);
+
+    std::string names[] = {"test", "toast", "tot", "top", "toa", "toad"};
+    for (const auto& name : names)
+        fixture.MakeClaim(fixture.GetCoinbase(), name, "one", 1);
+
+    fixture.MakeClaim(fixture.GetCoinbase(), "toa", "two", 2);
+    fixture.MakeClaim(fixture.GetCoinbase(), "toa", "tre", 3);
+    fixture.MakeClaim(fixture.GetCoinbase(), "toa", "qua", 4);
+    fixture.MakeClaim(fixture.GetCoinbase(), "toa", "cin", 5);
+    fixture.IncrementBlocks(1);
+
+    CClaimTrieProof proof;
+    for (const auto& name : names) {
+        BOOST_CHECK(fixture.getProofForName(name, proof));
+        auto it = fixture.find(name);
+        BOOST_CHECK_EQUAL(it->claims.size(), 1);
+        auto claimHash = ComputeMerkleRoot(getNodeHash(it));
+        ValidatePairs(fixture, proof, claimHash);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

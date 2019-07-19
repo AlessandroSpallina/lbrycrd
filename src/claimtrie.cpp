@@ -86,7 +86,7 @@ void CClaimTrieData::reorderClaims(const supportEntryType& supports)
                 claim.nEffectiveAmount += support.nAmount;
     }
 
-    std::make_heap(claims.begin(), claims.end());
+    std::sort(claims.rbegin(), claims.rend());
 }
 
 CClaimTrie::CClaimTrie(bool fMemory, bool fWipe, int proportionalDelayFactor)
@@ -312,7 +312,7 @@ void completeHash(uint256& partialHash, const std::string& key, std::size_t to)
             .Finalize(partialHash.begin());
 }
 
-bool recursiveCheckConsistency(CClaimTrie::const_iterator& it, int minimumHeight, std::string& failed)
+bool CClaimTrieCacheBase::recursiveCheckConsistency(CClaimTrie::const_iterator& it, int minimumHeight, std::string& failed) const
 {
     std::vector<uint8_t> vchToHash;
 
@@ -428,8 +428,6 @@ bool CClaimTrieCacheBase::flush()
 
     for (const auto& e : claimsToAdd)
         batch.Write(std::make_pair(CLAIM_BY_ID, e.claim.claimId), e);
-
-    getMerkleHash();
 
     for (const auto& nodeName : nodesToDelete) {
         if (cache.contains(nodeName))
@@ -1234,19 +1232,21 @@ bool CClaimTrieCacheBase::incrementBlock(insertUndoType& insertUndo, claimQueueR
 
     namesToCheckForTakeover.clear();
     takeoverWorkaround.clear();
+    // force update hash
+    getMerkleHash();
     nNextHeight++;
     return true;
 }
 
 bool CClaimTrieCacheBase::decrementBlock(insertUndoType& insertUndo, claimQueueRowType& expireUndo, insertUndoType& insertSupportUndo, supportQueueRowType& expireSupportUndo)
 {
-    nNextHeight--;
+    auto targetHeight = nNextHeight - 1;
 
     if (!expireSupportUndo.empty()) {
         for (auto itSupportExpireUndo = expireSupportUndo.crbegin(); itSupportExpireUndo != expireSupportUndo.crend(); ++itSupportExpireUndo) {
             insertSupportIntoMap(itSupportExpireUndo->first, itSupportExpireUndo->second, false);
-            if (nNextHeight == itSupportExpireUndo->second.nHeight + base->nExpirationTime) {
-                auto itSupportExpireRow = getSupportExpirationQueueCacheRow(nNextHeight, true);
+            if (targetHeight == itSupportExpireUndo->second.nHeight + base->nExpirationTime) {
+                auto itSupportExpireRow = getSupportExpirationQueueCacheRow(targetHeight, true);
                 itSupportExpireRow->second.emplace_back(itSupportExpireUndo->first, itSupportExpireUndo->second.outPoint);
             }
         }
@@ -1271,8 +1271,8 @@ bool CClaimTrieCacheBase::decrementBlock(insertUndoType& insertUndo, claimQueueR
             insertClaimIntoTrie(itExpireUndo->first, itExpireUndo->second, false);
             CClaimIndexElement element = {itExpireUndo->first, itExpireUndo->second};
             claimsToAdd.push_back(element);
-            if (nNextHeight == itExpireUndo->second.nHeight + base->nExpirationTime) {
-                auto itExpireRow = getExpirationQueueCacheRow(nNextHeight, true);
+            if (targetHeight == itExpireUndo->second.nHeight + base->nExpirationTime) {
+                auto itExpireRow = getExpirationQueueCacheRow(targetHeight, true);
                 itExpireRow->second.emplace_back(itExpireUndo->first, itExpireUndo->second.outPoint);
             }
         }
@@ -1293,6 +1293,10 @@ bool CClaimTrieCacheBase::decrementBlock(insertUndoType& insertUndo, claimQueueR
             claimsToDelete.insert(claim);
         }
     }
+
+    // force update hash
+    getMerkleHash();
+    nNextHeight = targetHeight;
 
     return true;
 }
@@ -1373,21 +1377,19 @@ bool CClaimTrieCacheBase::clear()
 
 bool CClaimTrieCacheBase::getProofForName(const std::string& name, CClaimTrieProof& proof)
 {
-    COutPoint outPoint;
     // cache the parent nodes
     cacheData(name, false);
     getMerkleHash();
-    bool fNameHasValue = false;
-    int nHeightOfLastTakeover = 0;
-    std::vector<CClaimTrieProofNode> nodes;
+    proof.hasValue = false;
+    proof.nHeightOfLastTakeover = 0;
     for (const auto& it : cache.nodes(name)) {
         CClaimValue claim;
         const auto& key = it.key();
         bool fNodeHasValue = it->getBestClaim(claim);
         uint256 valueHash;
-        if (fNodeHasValue) {
+        if (fNodeHasValue)
             valueHash = getValueHash(claim.outPoint, it->nHeightOfLastTakeover);
-        }
+
         const auto pos = key.size();
         std::vector<std::pair<unsigned char, uint256>> children;
         for (const auto& child : it.children()) {
@@ -1395,7 +1397,8 @@ bool CClaimTrieCacheBase::getProofForName(const std::string& name, CClaimTriePro
             if (name.find(childKey) == 0) {
                 for (auto i = pos; i + 1 < childKey.size(); ++i) {
                     children.emplace_back(childKey[i], uint256{});
-                    nodes.emplace_back(std::move(children), fNodeHasValue, valueHash);
+                    proof.nodes.emplace_back(children, fNodeHasValue, valueHash);
+                    children.clear();
                     valueHash.SetNull();
                     fNodeHasValue = false;
                 }
@@ -1407,15 +1410,14 @@ bool CClaimTrieCacheBase::getProofForName(const std::string& name, CClaimTriePro
             children.emplace_back(childKey[pos], hash);
         }
         if (key == name) {
-            fNameHasValue = fNodeHasValue;
-            if (fNameHasValue) {
-                outPoint = claim.outPoint;
-                nHeightOfLastTakeover = it->nHeightOfLastTakeover;
+            proof.hasValue = fNodeHasValue;
+            if (proof.hasValue) {
+                proof.outPoint = claim.outPoint;
+                proof.nHeightOfLastTakeover = it->nHeightOfLastTakeover;
             }
             valueHash.SetNull();
         }
-        nodes.emplace_back(std::move(children), fNodeHasValue, valueHash);
+        proof.nodes.emplace_back(std::move(children), fNodeHasValue, valueHash);
     }
-    proof = CClaimTrieProof(std::move(nodes), fNameHasValue, outPoint, nHeightOfLastTakeover);
     return true;
 }
