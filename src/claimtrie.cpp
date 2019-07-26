@@ -429,6 +429,8 @@ bool CClaimTrieCacheBase::flush()
     for (const auto& e : claimsToAdd)
         batch.Write(std::make_pair(CLAIM_BY_ID, e.claim.claimId), e);
 
+    getMerkleHash();
+
     for (const auto& nodeName : nodesToDelete) {
         if (cache.contains(nodeName))
             continue;
@@ -1232,21 +1234,19 @@ bool CClaimTrieCacheBase::incrementBlock(insertUndoType& insertUndo, claimQueueR
 
     namesToCheckForTakeover.clear();
     takeoverWorkaround.clear();
-    // force update hash
-    getMerkleHash();
     nNextHeight++;
     return true;
 }
 
 bool CClaimTrieCacheBase::decrementBlock(insertUndoType& insertUndo, claimQueueRowType& expireUndo, insertUndoType& insertSupportUndo, supportQueueRowType& expireSupportUndo)
 {
-    auto targetHeight = nNextHeight - 1;
+    nNextHeight--;
 
     if (!expireSupportUndo.empty()) {
         for (auto itSupportExpireUndo = expireSupportUndo.crbegin(); itSupportExpireUndo != expireSupportUndo.crend(); ++itSupportExpireUndo) {
             insertSupportIntoMap(itSupportExpireUndo->first, itSupportExpireUndo->second, false);
-            if (targetHeight == itSupportExpireUndo->second.nHeight + base->nExpirationTime) {
-                auto itSupportExpireRow = getSupportExpirationQueueCacheRow(targetHeight, true);
+            if (nNextHeight == itSupportExpireUndo->second.nHeight + base->nExpirationTime) {
+                auto itSupportExpireRow = getSupportExpirationQueueCacheRow(nNextHeight, true);
                 itSupportExpireRow->second.emplace_back(itSupportExpireUndo->first, itSupportExpireUndo->second.outPoint);
             }
         }
@@ -1271,8 +1271,8 @@ bool CClaimTrieCacheBase::decrementBlock(insertUndoType& insertUndo, claimQueueR
             insertClaimIntoTrie(itExpireUndo->first, itExpireUndo->second, false);
             CClaimIndexElement element = {itExpireUndo->first, itExpireUndo->second};
             claimsToAdd.push_back(element);
-            if (targetHeight == itExpireUndo->second.nHeight + base->nExpirationTime) {
-                auto itExpireRow = getExpirationQueueCacheRow(targetHeight, true);
+            if (nNextHeight == itExpireUndo->second.nHeight + base->nExpirationTime) {
+                auto itExpireRow = getExpirationQueueCacheRow(nNextHeight, true);
                 itExpireRow->second.emplace_back(itExpireUndo->first, itExpireUndo->second.outPoint);
             }
         }
@@ -1293,10 +1293,6 @@ bool CClaimTrieCacheBase::decrementBlock(insertUndoType& insertUndo, claimQueueR
             claimsToDelete.insert(claim);
         }
     }
-
-    // force update hash
-    getMerkleHash();
-    nNextHeight = targetHeight;
 
     return true;
 }

@@ -123,7 +123,6 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
         LogPrintf("CreateNewBlock(): pclaimTrie is invalid");
         return NULL;
     }
-    CClaimTrieCache trieCache(pclaimTrie);
     pblock->nVersion = ComputeBlockVersion(pindexPrev, chainparams.GetConsensus());
     // -regtest only: allow overriding block.nVersion with
     // -blockversion=N to test forking scenarios
@@ -150,6 +149,9 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
 
     int nPackagesSelected = 0;
     int nDescendantsUpdated = 0;
+    CClaimTrieCache trieCache(pclaimTrie);
+    trieCache.initializeIncrement();
+
     addPackageTxs(nPackagesSelected, nDescendantsUpdated, trieCache);
 
     int64_t nTime1 = GetTimeMicros();

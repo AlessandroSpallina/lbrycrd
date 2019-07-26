@@ -427,7 +427,7 @@ public:
     virtual bool getProofForName(const std::string& name, CClaimTrieProof& proof);
     virtual bool getInfoForName(const std::string& name, CClaimValue& claim) const;
 
-    bool finalizeDecrement(std::vector<std::pair<std::string, int>>& takeoverHeightUndo);
+    virtual bool finalizeDecrement(std::vector<std::pair<std::string, int>>& takeoverHeightUndo);
 
     virtual CClaimsForNameType getClaimsForName(const std::string& name) const;
 
@@ -446,6 +446,7 @@ public:
 protected:
     CClaimTrie* base;
     CClaimTrie cache;
+    std::unordered_set<std::string> alreadyCachedNodes;
     std::unordered_set<std::string> namesToCheckForTakeover;
 
     virtual uint256 recursiveComputeMerkleHash(CClaimTrie::iterator& it);
@@ -503,7 +504,6 @@ private:
 
     std::unordered_map<std::string, supportEntryType> cacheSupports;
     std::unordered_set<std::string> nodesToDelete;
-    std::unordered_set<std::string> alreadyCachedNodes;
     std::unordered_map<std::string, bool> takeoverWorkaround;
     std::unordered_set<std::string> removalWorkaround;
 
@@ -607,12 +607,15 @@ public:
     explicit CClaimTrieCacheHashFork(CClaimTrie* base, bool fRequireTakeoverHeights = true);
 
     bool getProofForName(const std::string& name, CClaimTrieProof& proof) override;
+    virtual void initializeIncrement();
+    bool finalizeDecrement(std::vector<std::pair<std::string, int>>& takeoverHeightUndo) override;
 
 protected:
     uint256 recursiveComputeMerkleHash(CClaimTrie::iterator& it) override;
     bool recursiveCheckConsistency(CClaimTrie::const_iterator& it, int minimumHeight, std::string& failed) const override;
 
 private:
+    void copyAllBaseToCache();
 };
 
 typedef CClaimTrieCacheHashFork CClaimTrieCache;

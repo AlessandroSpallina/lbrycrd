@@ -1964,6 +1964,8 @@ bool CChainState::ConnectBlock(const CBlock& block, CValidationState& state, CBl
 
     CCheckQueueControl<CScriptCheck> control(fScriptChecks && nScriptCheckThreads ? &scriptcheckqueue : nullptr);
 
+    trieCache.initializeIncrement();
+
     std::vector<int> prevheights;
     CAmount nFees = 0;
     int nInputs = 0;

@@ -243,25 +243,12 @@ CClaimTrieCacheHashFork::CClaimTrieCacheHashFork(CClaimTrie* base, bool fRequire
 static const uint256 leafHash = uint256S("0000000000000000000000000000000000000000000000000000000000000002");
 static const uint256 emptyHash = uint256S("0000000000000000000000000000000000000000000000000000000000000003");
 
-uint256 Hash(int64_t value)
-{
-    std::array<uint8_t, sizeof(value)> vch;
-    for (std::size_t i = 0; i < vch.size(); ++i)
-        vch[i] = (value >> ((vch.size() - i - 1) * 8)) & 0xff;
-    return Hash(vch.begin(), vch.end());
-}
-
-std::vector<uint256> getNodeHash(CClaimTrie::const_iterator it)
+std::vector<uint256> getClaimHashes(CClaimTrie::const_iterator it)
 {
     std::vector<uint256> hashes;
     for (auto& claim : it->claims) {
-        auto& hash = claim.outPoint.hash;
-        hashes.push_back(Hash(hash.begin(), hash.end()));
-        hashes.push_back(Hash(claim.outPoint.n));
-        hashes.push_back(Hash(claim.nEffectiveAmount));
-        hashes.push_back(Hash(claim.nValidAtHeight));
+        hashes.push_back(getValueHash(claim.outPoint, it->nHeightOfLastTakeover));
     }
-    hashes.push_back(Hash(it->nHeightOfLastTakeover));
     return hashes;
 }
 
@@ -279,7 +266,7 @@ uint256 recursiveMerkleHash(TIterator& it, const iCbType<TIterator>& process, co
 
     std::vector<uint256> claimHashes;
     if (!it->empty()) {
-        claimHashes = getNodeHash(it);
+        claimHashes = getClaimHashes(it);
     } else if (verify) {
         verify(it);
     }
@@ -423,7 +410,7 @@ bool CClaimTrieCacheHashFork::getProofForName(const std::string& name, CClaimTri
 
         std::vector<uint256> claimHashes;
         if (!it->empty())
-            claimHashes = getNodeHash(it);
+            claimHashes = getClaimHashes(it);
 
         // I am on a node; I need a hash(children, claims)
         // if I am the last node on the list, it will be hash(children, x)
@@ -447,4 +434,48 @@ bool CClaimTrieCacheHashFork::getProofForName(const std::string& name, CClaimTri
     }
     std::reverse(proof.pairs.begin(), proof.pairs.end());
     return true;
+}
+
+void CClaimTrieCacheHashFork::copyAllBaseToCache() {
+    if (alreadyCachedNodes.empty()) {
+        for (auto it = base->cbegin(); it != base->cend(); ++it) {
+            if (!alreadyCachedNodes.count(it.key())) {
+                auto copy = cache.copy(it);
+                copy->hash.SetNull();
+                alreadyCachedNodes.insert(it.key());
+            }
+        }
+    }
+    else {
+        for (auto it = base->cbegin(); it != base->cend(); ++it) {
+            if (!alreadyCachedNodes.count(it.key())) {
+                auto copy = cache.copy(it);
+                copy->hash.SetNull();
+                alreadyCachedNodes.insert(it.key());
+            } else {
+                auto hit = cache.find(it.key());
+                if (hit != cache.end())
+                    hit->hash.SetNull();
+            }
+        }
+    }
+}
+
+void CClaimTrieCacheHashFork::initializeIncrement() {
+    // we could do this in the constructor, but that would not allow for multiple increments in a row (as done in unit tests)
+
+    if (nNextHeight != Params().GetConsensus().nAllClaimsInMerkleForkHeight - 1)
+        return;
+
+    // if we are forking, we load the entire base trie into the cache trie
+    // we reset its hash computation so it can be recomputed completely
+    copyAllBaseToCache();
+}
+
+bool CClaimTrieCacheHashFork::finalizeDecrement(std::vector<std::pair<std::string, int>>& takeoverHeightUndo) {
+    auto ret = CClaimTrieCacheNormalizationFork::finalizeDecrement(takeoverHeightUndo);
+    if (ret && nNextHeight == Params().GetConsensus().nAllClaimsInMerkleForkHeight - 1) {
+        copyAllBaseToCache();
+    }
+    return ret;
 }
